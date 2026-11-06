@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param([switch]$RemoveStatus)
 $ErrorActionPreference = 'Stop'
-foreach ($name in @('TimeSync-FiveMinutes', 'TimeSync-OnBoot')) {
+foreach ($name in @('TimeSync-Periodic', 'TimeSync-FiveMinutes', 'TimeSync-OnBoot')) {
     $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if ($task) {
         Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop

@@ -50,7 +50,7 @@ jobs:
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -BinaryPath $binary -SkipInitialRun
             if ($LASTEXITCODE -ne 0) { throw 'Installer smoke test failed.' }
             $installed = Join-Path $env:ProgramFiles 'TimeSync\time-sync.exe'
-            foreach ($name in @('TimeSync-FiveMinutes', 'TimeSync-OnBoot')) {
+            foreach ($name in @('TimeSync-Periodic', 'TimeSync-OnBoot')) {
               $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
               if ($task.State -eq 'Disabled') { throw "Task $name is disabled." }
               if ($task.Actions[0].Execute.Trim('"') -ne $installed) { throw "Task $name has an unexpected executable: $($task.Actions[0].Execute)" }
@@ -58,7 +58,7 @@ jobs:
                 throw "Task $name does not run as SYSTEM."
               }
             }
-            $periodic = Get-ScheduledTask -TaskName 'TimeSync-FiveMinutes'
+            $periodic = Get-ScheduledTask -TaskName 'TimeSync-Periodic'
             $startup = Get-ScheduledTask -TaskName 'TimeSync-OnBoot'
             if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) {
               throw 'Five-minute trigger is missing.'
@@ -70,7 +70,7 @@ jobs:
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
             if ($LASTEXITCODE -ne 0) { throw 'Uninstaller smoke test failed.' }
           }
-          foreach ($name in @('TimeSync-FiveMinutes', 'TimeSync-OnBoot')) {
+          foreach ($name in @('TimeSync-Periodic', 'TimeSync-OnBoot')) {
             if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
               throw "Uninstaller left task $name registered."
             }

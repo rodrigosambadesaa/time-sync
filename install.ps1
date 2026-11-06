@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$BinaryPath,
-    [string]$Interval = '5m',
+    [string]$Interval = '1m',
     [switch]$SkipInitialRun
 )
 $ErrorActionPreference = 'Stop'
@@ -25,7 +25,7 @@ function ConvertTo-TaskInterval {
         try {
             $duration = [TimeSpan]::Parse($text, [Globalization.CultureInfo]::InvariantCulture)
         } catch {
-            throw "Invalid interval '$Value'. Use a number followed by s, m, h or d (for example 30m or 2h), or HH:MM:SS."
+            throw "Invalid interval '$Value'. Use a number followed by m, h or d (for example 1m or 2h), or HH:MM:SS."
         }
     }
 
@@ -42,7 +42,8 @@ if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
     $BinaryPath = Join-Path -Path $PSScriptRoot -ChildPath 'time-sync.exe'
 }
 $BinaryPath = [System.IO.Path]::GetFullPath($BinaryPath)
-$intervalTaskName = 'TimeSync-FiveMinutes'
+$intervalTaskName = 'TimeSync-Periodic'
+$legacyIntervalTaskName = 'TimeSync-FiveMinutes'
 $bootTaskName = 'TimeSync-OnBoot'
 $installDir = Join-Path $env:ProgramFiles 'TimeSync'
 $target = Join-Path $installDir 'time-sync.exe'
@@ -57,6 +58,9 @@ if ((Get-CimInstance Win32_ComputerSystem).PartOfDomain) {
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 # Program Files has inherited ACLs that prohibit modifications by ordinary users.
 Copy-Item -LiteralPath $BinaryPath -Destination $target -Force
+
+# Remove the old task name when upgrading from releases that used it.
+& schtasks.exe /Delete /TN $legacyIntervalTaskName /F 2>$null
 
 # Use native Windows Task Scheduler triggers. Launch schtasks.exe with one
 # explicitly quoted command-line string so paths containing spaces remain intact
