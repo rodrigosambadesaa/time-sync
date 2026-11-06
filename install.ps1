@@ -1,7 +1,12 @@
 #Requires -RunAsAdministrator
 [CmdletBinding()]
-param([string]$BinaryPath = (Join-Path $PSScriptRoot 'time-sync.exe'))
+param([string]$BinaryPath)
 $ErrorActionPreference = 'Stop'
+# Resolve the path only after the script has been entered: $PSScriptRoot can be
+# empty while a default parameter value is being evaluated by Windows PowerShell.
+if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
+    $BinaryPath = Join-Path -Path $PSScriptRoot -ChildPath 'time-sync.exe'
+}
 $taskName = 'TimeSync-FiveMinutes'
 $installDir = Join-Path $env:ProgramFiles 'TimeSync'
 $target = Join-Path $installDir 'time-sync.exe'
@@ -19,7 +24,7 @@ Copy-Item -LiteralPath $BinaryPath -Destination $target -Force
 $escaped = [System.Security.SecurityElement]::Escape($target)
 $start = (Get-Date).AddMinutes(1).ToString('yyyy-MM-ddTHH:mm:ss')
 $xml = @"
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Synchronize the Windows UTC clock with multiple NTP servers every five minutes.</Description></RegistrationInfo>
   <Triggers>
@@ -42,14 +47,9 @@ $xml = @"
   <Actions Context="System"><Exec><Command>$escaped</Command><Arguments>-mode sync</Arguments><WorkingDirectory>$([System.Security.SecurityElement]::Escape($installDir))</WorkingDirectory></Exec></Actions>
 </Task>
 "@
-$temp = Join-Path $env:TEMP ('time-sync-task-' + [guid]::NewGuid().ToString('N') + '.xml')
-try {
-    [System.IO.File]::WriteAllText($temp, $xml, (New-Object System.Text.UTF8Encoding($false)))
-    & schtasks.exe /Create /TN $taskName /XML $temp /F
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create scheduled task (code $LASTEXITCODE)" }
-} finally {
-    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
-}
+# Pass the XML as a .NET string, not as an on-disk file. schtasks.exe /XML
+# interprets the encoding declaration inconsistently on some Windows builds.
+Register-ScheduledTask -TaskName $taskName -Xml $xml -Force -ErrorAction Stop | Out-Null
 Start-ScheduledTask -TaskName $taskName
 Write-Host "Installed: $target"
 Write-Host "Task: $taskName (boot + every 5 minutes; runs as SYSTEM)"

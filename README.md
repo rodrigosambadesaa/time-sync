@@ -17,7 +17,7 @@ A small, open-source, **no-third-party-dependencies** Windows clock synchronizer
 
 1. Download the release ZIP for your processor from **Releases**, and compare its SHA-256 with `SHA256SUMS.txt`.
 2. **Extract the ZIP into a local folder you trust**. Do not run scripts directly from a compressed archive.
-3. Open **Windows PowerShell as Administrator** in the extracted folder and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`.
+3. Open **Windows PowerShell as Administrator** in the extracted folder and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`. v0.1.1 fixes PowerShell parameter initialization and XML task-registration failures in v0.1.0.
 4. Inspect Task Scheduler for `TimeSync-FiveMinutes`. This task executes the installed binary from `%ProgramFiles%\TimeSync` as SYSTEM. It runs immediately after installation as well.
 5. Monitor `%ProgramData%\TimeSync\status.json` and compare https://time.is/ after the first successful sync.
 
@@ -41,7 +41,7 @@ go vet ./...
 $env:GOOS='windows'; $env:GOARCH='amd64'; go build -trimpath -o time-sync.exe ./cmd/time-sync
 ```
 
-The `release.yml` workflow tests on Windows/Linux, cross-compiles x64/ARM64, makes reproducible source-based packages and publishes `v0.1.0` after the first passing push to `main`. Later versions are released by manual workflow dispatch with a version input.
+The `release.yml` workflow tests on Windows/Linux, validates PowerShell syntax, cross-compiles x64/ARM64, and publishes `v0.1.1` after a passing push to `main` (if absent). Later versions may be released by workflow dispatch with a version input.
 
 ## License
 
