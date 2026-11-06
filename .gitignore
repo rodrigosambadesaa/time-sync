@@ -1,0 +1,4 @@
+*.exe
+*.zip
+SHA256SUMS.txt
+status.json
