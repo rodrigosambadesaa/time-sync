@@ -60,7 +60,10 @@ New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 Copy-Item -LiteralPath $BinaryPath -Destination $target -Force
 
 # Remove the old task name when upgrading from releases that used it.
-& schtasks.exe /Delete /TN $legacyIntervalTaskName /F 2>$null
+$legacyTask = Get-ScheduledTask -TaskName $legacyIntervalTaskName -ErrorAction SilentlyContinue
+if ($legacyTask) {
+    Unregister-ScheduledTask -TaskName $legacyIntervalTaskName -Confirm:$false -ErrorAction Stop
+}
 
 # Use native Windows Task Scheduler triggers. Launch schtasks.exe with one
 # explicitly quoted command-line string so paths containing spaces remain intact

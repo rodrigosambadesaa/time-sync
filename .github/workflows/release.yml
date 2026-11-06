@@ -61,7 +61,7 @@ jobs:
             $periodic = Get-ScheduledTask -TaskName 'TimeSync-Periodic'
             $startup = Get-ScheduledTask -TaskName 'TimeSync-OnBoot'
             if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) {
-              throw 'Five-minute trigger is missing.'
+    throw 'Periodic trigger is missing.'
             }
             if (-not ($startup.Triggers | Where-Object { $_.CimClass.CimClassName -match 'BootTrigger' })) {
               throw 'Startup trigger is missing.'
