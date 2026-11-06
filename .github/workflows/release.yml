@@ -38,6 +38,88 @@ jobs:
               throw ("Invalid PowerShell syntax in {0}: {1}" -f $file, ($parseErrors -join '; '))
             }
           }
+      - name: Install and uninstall scheduled tasks on real Windows runner
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = Join-Path $env:RUNNER_TEMP 'time-sync-ci.exe'
+          go build -trimpath -o $binary ./cmd/time-sync
+          if ($LASTEXITCODE -ne 0) { throw 'Windows executable build failed.' }
+          try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -BinaryPath $binary -SkipInitialRun
+            if ($LASTEXITCODE -ne 0) { throw 'Installer smoke test failed.' }
+            $installed = Join-Path $env:ProgramFiles 'TimeSync\time-sync.exe'
+            foreach ($name in @('TimeSync-FiveMinutes', 'TimeSync-OnBoot')) {
+              $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
+              if ($task.State -eq 'Disabled') { throw "Task $name is disabled." }
+              if ($task.Actions[0].Execute -ne $installed) { throw "Task $name has an unexpected executable." }
+              if ($task.Principal.UserId -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM|S-1-5-18)    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build and package self-contained binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/amd64 dist/arm64
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/amd64/time-sync.exe ./cmd/time-sync
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/arm64/time-sync.exe ./cmd/time-sync
+          zip -j time-sync-windows-amd64.zip dist/amd64/time-sync.exe install.ps1 uninstall.ps1 README.md LICENSE
+          zip -j time-sync-windows-arm64.zip dist/arm64/time-sync.exe install.ps1 uninstall.ps1 README.md LICENSE
+          sha256sum time-sync-windows-*.zip > SHA256SUMS.txt
+      - name: Publish only a new version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='v0.1.2'
+          if [[ "$EVENT" == workflow_dispatch ]]; then
+            version="$INPUT_VERSION"
+            if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo 'Version must follow vMAJOR.MINOR.PATCH' >&2; exit 1
+            fi
+          fi
+          if gh release view "$version" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $version already exists; leaving it unchanged."
+            exit 0
+          fi
+          gh release create "$version" time-sync-windows-amd64.zip time-sync-windows-arm64.zip SHA256SUMS.txt \
+            --repo "$REPO" --target "$GITHUB_SHA" --title "TimeSync $version" \
+            --notes 'Windows 11 clock synchronization via validated NTP consensus. Installs a SYSTEM task on startup and every five minutes. Time.is is a manual visual comparison reference, not a time data source. Install: extract ZIP, check SHA256SUMS.txt, and run install.ps1 as Administrator. Unsigned binaries; inspect the source and Actions build before use.'
+) {
+                throw "Task $name does not run as SYSTEM."
+              }
+            }
+            $periodic = Get-ScheduledTask -TaskName 'TimeSync-FiveMinutes'
+            $startup = Get-ScheduledTask -TaskName 'TimeSync-OnBoot'
+            if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) {
+              throw 'Five-minute trigger is missing.'
+            }
+            if (-not ($startup.Triggers | Where-Object { $_.CimClass.CimClassName -match 'BootTrigger' })) {
+              throw 'Startup trigger is missing.'
+            }
+          } finally {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Uninstaller smoke test failed.' }
+          }
+          foreach ($name in @('TimeSync-FiveMinutes', 'TimeSync-OnBoot')) {
+            if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
+              throw "Uninstaller left task $name registered."
+            }
+          }
   release:
     if: github.event_name != 'pull_request'
     needs: test
@@ -70,7 +152,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version='v0.1.1'
+          version='v0.1.2'
           if [[ "$EVENT" == workflow_dispatch ]]; then
             version="$INPUT_VERSION"
             if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

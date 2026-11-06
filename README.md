@@ -6,7 +6,7 @@ A small, open-source, **no-third-party-dependencies** Windows clock synchronizer
 
 ## Features
 
-- Boot trigger (~30 seconds after startup), plus an indefinitely recurring Task Scheduler trigger **every 5 minutes**, even if no user logs in.
+- Two native Task Scheduler tasks: `TimeSync-OnBoot` (~30 seconds after startup) and `TimeSync-FiveMinutes` (repeats **every 5 minutes** indefinitely), even when no user logs in.
 - Works as Windows **SYSTEM** because correcting the computer clock needs the system-time privilege.
 - Parallel queries to four distinct NTP names, validated responses (NTP mode, leap/stratum, origin token, dispersion, round-trip delay) and **2+ server consensus**; rejects disagreements >150 ms.
 - UTC clock correction with millisecond resolution. Less than 5 ms discrepancy is deliberately ignored to avoid incessant tiny clock steps; any correction >10 minutes is refused.
@@ -17,8 +17,8 @@ A small, open-source, **no-third-party-dependencies** Windows clock synchronizer
 
 1. Download the release ZIP for your processor from **Releases**, and compare its SHA-256 with `SHA256SUMS.txt`.
 2. **Extract the ZIP into a local folder you trust**. Do not run scripts directly from a compressed archive.
-3. Open **Windows PowerShell as Administrator** in the extracted folder and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`. v0.1.1 fixes PowerShell parameter initialization and XML task-registration failures in v0.1.0.
-4. Inspect Task Scheduler for `TimeSync-FiveMinutes`. This task executes the installed binary from `%ProgramFiles%\TimeSync` as SYSTEM. It runs immediately after installation as well.
+3. Open **Windows PowerShell as Administrator** in the extracted folder and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`. v0.1.2 additionally replaces the invalid XML `LogonType` with native `schtasks` registration and tests installation on a Windows runner.
+4. Inspect Task Scheduler for `TimeSync-FiveMinutes` and `TimeSync-OnBoot`. Both tasks execute the installed binary from `%ProgramFiles%\TimeSync` as SYSTEM. The installer also starts the first sync immediately.
 5. Monitor `%ProgramData%\TimeSync\status.json` and compare https://time.is/ after the first successful sync.
 
 Check without changing the clock: `& "$env:ProgramFiles\TimeSync\time-sync.exe" -mode check`.
@@ -41,8 +41,12 @@ go vet ./...
 $env:GOOS='windows'; $env:GOARCH='amd64'; go build -trimpath -o time-sync.exe ./cmd/time-sync
 ```
 
-The `release.yml` workflow tests on Windows/Linux, validates PowerShell syntax, cross-compiles x64/ARM64, and publishes `v0.1.1` after a passing push to `main` (if absent). Later versions may be released by workflow dispatch with a version input.
+The `release.yml` workflow tests on Windows/Linux, validates PowerShell syntax, cross-compiles x64/ARM64, runs an actual Windows scheduled-task install/uninstall test, and publishes `v0.1.2` after a passing push to `main` (if absent). Later versions may be released by workflow dispatch with a version input.
 
 ## License
 
 MIT; see [LICENSE](LICENSE).
+
+## Upgrading from v0.1.0 or v0.1.1
+
+Extract the new ZIP into a *new* directory and rerun `install.ps1` as Administrator. The installer replaces the binary and registers both tasks. Uninstall removes both tasks; no reboot is required. SHA256 checksums change with each release.

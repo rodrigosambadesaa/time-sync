@@ -1,13 +1,18 @@
 #Requires -RunAsAdministrator
 [CmdletBinding()]
-param([string]$BinaryPath)
+param(
+    [string]$BinaryPath,
+    [switch]$SkipInitialRun
+)
 $ErrorActionPreference = 'Stop'
-# Resolve the path only after the script has been entered: $PSScriptRoot can be
-# empty while a default parameter value is being evaluated by Windows PowerShell.
+
+# Resolve the script directory after PowerShell binds parameters.
 if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
     $BinaryPath = Join-Path -Path $PSScriptRoot -ChildPath 'time-sync.exe'
 }
-$taskName = 'TimeSync-FiveMinutes'
+$BinaryPath = [System.IO.Path]::GetFullPath($BinaryPath)
+$intervalTaskName = 'TimeSync-FiveMinutes'
+$bootTaskName = 'TimeSync-OnBoot'
 $installDir = Join-Path $env:ProgramFiles 'TimeSync'
 $target = Join-Path $installDir 'time-sync.exe'
 
@@ -21,36 +26,26 @@ if ((Get-CimInstance Win32_ComputerSystem).PartOfDomain) {
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 # Program Files has inherited ACLs that prohibit modifications by ordinary users.
 Copy-Item -LiteralPath $BinaryPath -Destination $target -Force
-$escaped = [System.Security.SecurityElement]::Escape($target)
-$start = (Get-Date).AddMinutes(1).ToString('yyyy-MM-ddTHH:mm:ss')
-$xml = @"
-<?xml version="1.0"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Synchronize the Windows UTC clock with multiple NTP servers every five minutes.</Description></RegistrationInfo>
-  <Triggers>
-    <BootTrigger><Enabled>true</Enabled><Delay>PT30S</Delay></BootTrigger>
-    <CalendarTrigger>
-      <Enabled>true</Enabled><StartBoundary>$start</StartBoundary>
-      <Repetition><Interval>PT5M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
-      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
-    </CalendarTrigger>
-  </Triggers>
-  <Principals><Principal id="System"><UserId>S-1-5-18</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <Enabled>true</Enabled>
-    <ExecutionTimeLimit>PT1M</ExecutionTimeLimit>
-  </Settings>
-  <Actions Context="System"><Exec><Command>$escaped</Command><Arguments>-mode sync</Arguments><WorkingDirectory>$([System.Security.SecurityElement]::Escape($installDir))</WorkingDirectory></Exec></Actions>
-</Task>
-"@
-# Pass the XML as a .NET string, not as an on-disk file. schtasks.exe /XML
-# interprets the encoding declaration inconsistently on some Windows builds.
-Register-ScheduledTask -TaskName $taskName -Xml $xml -Force -ErrorAction Stop | Out-Null
-Start-ScheduledTask -TaskName $taskName
+
+# Use documented schtasks.exe native triggers, not hand-authored Task Scheduler
+# XML: various Windows builds reject XML principal and encoding combinations.
+# MINUTE /MO 5 repeats without an end date; ONSTART also works without login.
+$taskCommand = '"' + $target + '" -mode sync'
+& schtasks.exe /Create /TN $intervalTaskName /TR $taskCommand /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to register five-minute task (exit code $LASTEXITCODE)."
+}
+& schtasks.exe /Create /TN $bootTaskName /TR $taskCommand /SC ONSTART /DELAY 0000:30 /RU SYSTEM /RL HIGHEST /F
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to register startup task (exit code $LASTEXITCODE)."
+}
+if (-not $SkipInitialRun) {
+    & schtasks.exe /Run /TN $intervalTaskName
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to start synchronization task (exit code $LASTEXITCODE)."
+    }
+}
 Write-Host "Installed: $target"
-Write-Host "Task: $taskName (boot + every 5 minutes; runs as SYSTEM)"
-Write-Host 'To inspect synchronization, read C:\ProgramData\TimeSync\status.json or run time-sync.exe -mode check.'
+Write-Host "Tasks: $intervalTaskName (every five minutes), $bootTaskName (at boot, delayed 30 seconds)."
+Write-Host 'Both run as SYSTEM without a user sign-in.'
+Write-Host 'Status: C:\ProgramData\TimeSync\status.json'
