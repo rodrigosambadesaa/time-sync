@@ -27,17 +27,20 @@ New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 # Program Files has inherited ACLs that prohibit modifications by ordinary users.
 Copy-Item -LiteralPath $BinaryPath -Destination $target -Force
 
-# Use documented schtasks.exe native triggers, not hand-authored Task Scheduler
-# XML: various Windows builds reject XML principal and encoding combinations.
-# MINUTE /MO 5 repeats without an end date; ONSTART also works without login.
-$taskCommand = '"' + $target + '" -mode sync'
-& schtasks.exe /Create /TN $intervalTaskName /TR $taskCommand /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to register five-minute task (exit code $LASTEXITCODE)."
+# Use native Windows Task Scheduler triggers. Launch schtasks.exe with one
+# explicitly quoted command-line string so paths containing spaces remain intact
+# in Windows PowerShell 5.1 and PowerShell 7.
+$taskCommand = '\"' + $target + '\" -mode sync'
+$scheduledTasksExe = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+$everyFiveMinutesArgs = '/Create /TN "{0}" /TR "{1}" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F' -f $intervalTaskName, $taskCommand
+$periodicResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $everyFiveMinutesArgs -Wait -PassThru -NoNewWindow
+if ($periodicResult.ExitCode -ne 0) {
+    throw "Failed to register five-minute task (exit code $($periodicResult.ExitCode))."
 }
-& schtasks.exe /Create /TN $bootTaskName /TR $taskCommand /SC ONSTART /DELAY 0000:30 /RU SYSTEM /RL HIGHEST /F
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to register startup task (exit code $LASTEXITCODE)."
+$startupArgs = '/Create /TN "{0}" /TR "{1}" /SC ONSTART /DELAY 0000:30 /RU SYSTEM /RL HIGHEST /F' -f $bootTaskName, $taskCommand
+$startupResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $startupArgs -Wait -PassThru -NoNewWindow
+if ($startupResult.ExitCode -ne 0) {
+    throw "Failed to register startup task (exit code $($startupResult.ExitCode))."
 }
 if (-not $SkipInitialRun) {
     & schtasks.exe /Run /TN $intervalTaskName
