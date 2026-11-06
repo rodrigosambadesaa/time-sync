@@ -70,14 +70,9 @@ func main() {
 	mode := flag.String("mode", "sync", "sync or check (check never sets system time)")
 	peers := flag.String("servers", "time.cloudflare.com,time.windows.com,0.es.pool.ntp.org,1.es.pool.ntp.org", "comma-separated NTP hosts")
 	maxStep := flag.Duration("max-step", 10*time.Minute, "refuse clock corrections larger than this")
-	minDrift := flag.Duration("min-drift", 10*time.Millisecond, "only correct the clock when the measured offset exceeds this")
 	flag.Parse()
 	if *mode != "sync" && *mode != "check" {
 		fmt.Fprintln(os.Stderr, "-mode must be sync or check")
-		os.Exit(2)
-	}
-	if *minDrift <= 0 {
-		fmt.Fprintln(os.Stderr, "-min-drift must be positive")
 		os.Exit(2)
 	}
 	servers := strings.Split(*peers, ",")
@@ -122,10 +117,8 @@ func main() {
 	}
 	status.OffsetMilliseconds = float64(offset) / float64(time.Millisecond)
 	if err == nil && *mode == "sync" {
-		if offset > *minDrift || offset < -*minDrift {
-			err = setClock(offset)
-			status.Applied = err == nil
-		}
+		err = setClock(offset)
+		status.Applied = err == nil
 	}
 	if err != nil {
 		status.Error = err.Error()

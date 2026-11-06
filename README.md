@@ -9,7 +9,7 @@ A small, open-source, **no-third-party-dependencies** Windows clock synchronizer
 - Two native Task Scheduler tasks: `TimeSync-OnBoot` (~30 seconds after startup) and `TimeSync-Periodic` (repeats **every minute by default** indefinitely), even when no user logs in. The interval is configurable during installation.
 - Works as Windows **SYSTEM** because correcting the computer clock needs the system-time privilege.
 - Parallel queries to four distinct NTP names, validated responses (NTP mode, leap/stratum, origin token, dispersion, round-trip delay) and **2+ server consensus**; rejects disagreements >150 ms.
-- UTC clock correction with millisecond resolution. Less than 5 ms discrepancy is deliberately ignored to avoid incessant tiny clock steps; any correction >10 minutes is refused.
+- UTC clock correction with millisecond resolution. Every successful consensus check applies a correction; any correction >10 minutes is refused.
 - Self-contained Windows x64 and ARM64 executables, zero Go runtime installation, offline uninstall.
 - Minimal status in `%ProgramData%\TimeSync\status.json` (no personal data); no network access except NTP over UDP/123.
 
@@ -37,7 +37,7 @@ Uninstall as Administrator: `powershell.exe -NoProfile -ExecutionPolicy Bypass -
 
 The **NTP protocol is not authenticated** here; MITM attacks and compromised servers cannot be completely excluded. Consensus and the 10-minute step cap reduce, but do not eliminate, risk. Do not use this for financial, industrial, security-critical or domain-joined timekeeping. Installation is intentionally blocked on Active Directory domain-joined PCs. A regular PC may already synchronize via the built-in Windows Time service; avoid deploying multiple competing time agents. NTP/UDP port 123 must be available; if blocked, the program leaves the clock untouched and reports a failure. It also leaves the clock untouched if sources disagree.
 
-Every scheduled run re-measures the offset. The source clock is only adjusted when the consensus offset exceeds 10 ms by default (`-min-drift 10ms`), and **each correction steps** the Windows clock rather than gradually slewing it. You can raise or lower that threshold when invoking the binary, for example `-min-drift 50ms`. An occasional backward time step can affect software that relies on wall-clock time; Windows' monotonic clocks remain preferable for measuring elapsed time.
+Every scheduled run re-measures the offset and applies the consensus correction, even when it is only a few milliseconds. **Each correction steps** the Windows clock rather than gradually slewing it; the 10-minute safety cap remains in force. This can introduce small clock steps and affect software that relies on wall-clock time; Windows' monotonic clocks remain preferable for measuring elapsed time.
 
 The default peers are `time.cloudflare.com`, `time.windows.com`, `0.es.pool.ntp.org` and `1.es.pool.ntp.org`. You can run a manual check with `-servers "a.example,b.example"`, but the scheduled task uses the built-in defaults. Time.is's own nominal web precision is typically about 20–100 ms, not a hard guarantee.
 
