@@ -2,10 +2,41 @@
 [CmdletBinding()]
 param(
     [string]$BinaryPath,
+    [string]$Interval = '5m',
     [switch]$SkipInitialRun
 )
 $ErrorActionPreference = 'Stop'
 
+function ConvertTo-TaskInterval {
+    param([Parameter(Mandatory)][string]$Value)
+
+    $text = $Value.Trim()
+    $duration = [TimeSpan]::Zero
+    $match = [regex]::Match($text, '^([0-9]+)\s*([smhd])$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($match.Success) {
+        $amount = [int64]$match.Groups[1].Value
+        switch ($match.Groups[2].Value.ToLowerInvariant()) {
+            's' { $duration = [TimeSpan]::FromSeconds($amount) }
+            'm' { $duration = [TimeSpan]::FromMinutes($amount) }
+            'h' { $duration = [TimeSpan]::FromHours($amount) }
+            'd' { $duration = [TimeSpan]::FromDays($amount) }
+        }
+    } else {
+        try {
+            $duration = [TimeSpan]::Parse($text, [Globalization.CultureInfo]::InvariantCulture)
+        } catch {
+            throw "Invalid interval '$Value'. Use a number followed by s, m, h or d (for example 30m or 2h), or HH:MM:SS."
+        }
+    }
+
+    if ($duration -lt [TimeSpan]::FromMinutes(1) -or $duration -gt [TimeSpan]::FromMinutes(1439) -or $duration.TotalMinutes -ne [math]::Floor($duration.TotalMinutes)) {
+        throw 'Interval must be a whole number of minutes between 1 minute and 23 hours 59 minutes.'
+    }
+
+    [pscustomobject]@{ TimeSpan = $duration; Minutes = [int]$duration.TotalMinutes }
+}
+
+$intervalInfo = ConvertTo-TaskInterval $Interval
 # Resolve the script directory after PowerShell binds parameters.
 if ([string]::IsNullOrWhiteSpace($BinaryPath)) {
     $BinaryPath = Join-Path -Path $PSScriptRoot -ChildPath 'time-sync.exe'
@@ -32,10 +63,10 @@ Copy-Item -LiteralPath $BinaryPath -Destination $target -Force
 # in Windows PowerShell 5.1 and PowerShell 7.
 $taskCommand = '\"' + $target + '\" -mode sync'
 $scheduledTasksExe = Join-Path $env:SystemRoot 'System32\schtasks.exe'
-$everyFiveMinutesArgs = '/Create /TN "{0}" /TR "{1}" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST /F' -f $intervalTaskName, $taskCommand
-$periodicResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $everyFiveMinutesArgs -Wait -PassThru -NoNewWindow
+$periodicTaskArgs = '/Create /TN "{0}" /TR "{1}" /SC MINUTE /MO {2} /RU SYSTEM /RL HIGHEST /F' -f $intervalTaskName, $taskCommand, $intervalInfo.Minutes
+$periodicResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $periodicTaskArgs -Wait -PassThru -NoNewWindow
 if ($periodicResult.ExitCode -ne 0) {
-    throw "Failed to register five-minute task (exit code $($periodicResult.ExitCode))."
+    throw "Failed to register synchronization task (exit code $($periodicResult.ExitCode))."
 }
 $startupArgs = '/Create /TN "{0}" /TR "{1}" /SC ONSTART /DELAY 0000:30 /RU SYSTEM /RL HIGHEST /F' -f $bootTaskName, $taskCommand
 $startupResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $startupArgs -Wait -PassThru -NoNewWindow
@@ -49,6 +80,6 @@ if (-not $SkipInitialRun) {
     }
 }
 Write-Host "Installed: $target"
-Write-Host "Tasks: $intervalTaskName (every five minutes), $bootTaskName (at boot, delayed 30 seconds)."
+Write-Host "Tasks: $intervalTaskName (every $($intervalInfo.TimeSpan)), $bootTaskName (at boot, delayed 30 seconds)."
 Write-Host 'Both run as SYSTEM without a user sign-in.'
 Write-Host 'Status: C:\ProgramData\TimeSync\status.json'

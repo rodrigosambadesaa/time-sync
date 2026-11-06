@@ -6,7 +6,7 @@ A small, open-source, **no-third-party-dependencies** Windows clock synchronizer
 
 ## Features
 
-- Two native Task Scheduler tasks: `TimeSync-OnBoot` (~30 seconds after startup) and `TimeSync-FiveMinutes` (repeats **every 5 minutes** indefinitely), even when no user logs in.
+- Two native Task Scheduler tasks: `TimeSync-OnBoot` (~30 seconds after startup) and `TimeSync-FiveMinutes` (repeats **every 5 minutes by default** indefinitely), even when no user logs in. The interval is configurable during installation.
 - Works as Windows **SYSTEM** because correcting the computer clock needs the system-time privilege.
 - Parallel queries to four distinct NTP names, validated responses (NTP mode, leap/stratum, origin token, dispersion, round-trip delay) and **2+ server consensus**; rejects disagreements >150 ms.
 - UTC clock correction with millisecond resolution. Less than 5 ms discrepancy is deliberately ignored to avoid incessant tiny clock steps; any correction >10 minutes is refused.
@@ -20,6 +20,14 @@ A small, open-source, **no-third-party-dependencies** Windows clock synchronizer
 3. Open **Windows PowerShell as Administrator** in the extracted folder and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`. v0.1.2 additionally replaces the invalid XML `LogonType` with native `schtasks` registration and tests installation on a Windows runner.
 4. Inspect Task Scheduler for `TimeSync-FiveMinutes` and `TimeSync-OnBoot`. Both tasks execute the installed binary from `%ProgramFiles%\TimeSync` as SYSTEM. The installer also starts the first sync immediately.
 5. Monitor `%ProgramData%\TimeSync\status.json` and compare https://time.is/ after the first successful sync.
+
+The default interval is five minutes. To choose a custom interval, pass `-Interval` when installing; use a number followed by `s`, `m`, `h` or `d`, or `HH:MM:SS`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Interval 15m
+```
+
+Intervals from 1 minute through 23 hours 59 minutes are accepted; use a whole number of minutes because the installer uses Task Scheduler's native minute trigger. Re-running the installer updates the existing scheduled task.
 
 Check without changing the clock: `& "$env:ProgramFiles\TimeSync\time-sync.exe" -mode check`.
 
@@ -41,7 +49,7 @@ go vet ./...
 $env:GOOS='windows'; $env:GOARCH='amd64'; go build -trimpath -o time-sync.exe ./cmd/time-sync
 ```
 
-The `release.yml` workflow tests on Windows/Linux, validates PowerShell syntax, cross-compiles x64/ARM64, runs an actual Windows scheduled-task install/uninstall test, and publishes `v0.1.2` after a passing push to `main` (if absent). Later versions may be released by workflow dispatch with a version input.
+The `release.yml` workflow tests on Windows/Linux, validates PowerShell syntax, cross-compiles x64/ARM64, runs an actual Windows scheduled-task install/uninstall test, and publishes releases after a passing push to `main` (if absent). Later versions may be released by workflow dispatch with a version input.
 
 ## License
 
