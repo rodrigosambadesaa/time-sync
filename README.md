@@ -18,7 +18,7 @@ A small, open-source, **no-third-party-dependencies** Windows clock synchronizer
 1. Download the release ZIP for your processor from **Releases**, and compare its SHA-256 with `SHA256SUMS.txt`.
 2. **Extract the ZIP into a local folder you trust**. Do not run scripts directly from a compressed archive.
 3. Open **Windows PowerShell as Administrator** in the extracted folder and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`. v0.1.2 additionally replaces the invalid XML `LogonType` with native `schtasks` registration and tests installation on a Windows runner.
-4. Inspect Task Scheduler for `TimeSync-Periodic` and `TimeSync-OnBoot`. Both tasks execute the installed binary from `%ProgramFiles%\TimeSync` as SYSTEM. The installer also starts the first sync immediately.
+4. Inspect Task Scheduler for `TimeSync-Periodic` and `TimeSync-OnBoot`. Both tasks execute the installed binary from `%ProgramFiles%\TimeSync` as SYSTEM. The periodic task is configured to run the missed check when Windows resumes from sleep or hibernation, without waking the computer every minute. The installer also starts the first sync immediately.
 5. Monitor `%ProgramData%\TimeSync\status.json` and compare https://time.is/ after the first successful sync.
 
 The default interval is one minute. To choose a custom interval, pass `-Interval` when installing; use a number followed by `m`, `h` or `d`, or `HH:MM:SS`:

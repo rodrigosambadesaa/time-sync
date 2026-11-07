@@ -80,6 +80,12 @@ $startupResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $start
 if ($startupResult.ExitCode -ne 0) {
     throw "Failed to register startup task (exit code $($startupResult.ExitCode))."
 }
+# A minute trigger cannot run while the machine is hibernated. StartWhenAvailable
+# makes Task Scheduler run the missed synchronization as soon as Windows resumes,
+# without waking the machine every minute while it is asleep.
+$taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Set-ScheduledTask -TaskName $intervalTaskName -Settings $taskSettings | Out-Null
+Set-ScheduledTask -TaskName $bootTaskName -Settings $taskSettings | Out-Null
 if (-not $SkipInitialRun) {
     & schtasks.exe /Run /TN $intervalTaskName
     if ($LASTEXITCODE -ne 0) {

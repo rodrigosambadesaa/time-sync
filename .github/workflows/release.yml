@@ -60,6 +60,9 @@ jobs:
             }
             $periodic = Get-ScheduledTask -TaskName 'TimeSync-Periodic'
             $startup = Get-ScheduledTask -TaskName 'TimeSync-OnBoot'
+            if (-not $periodic.Settings.StartWhenAvailable) {
+              throw 'Periodic task is not configured to run after resume.'
+            }
             if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) {
               throw 'Periodic trigger is missing.'
             }
