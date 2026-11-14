@@ -2,6 +2,8 @@ package ntp
 
 import (
     "context"
+    "crypto/tls"
+    "net"
     "fmt"
     "time"
 
@@ -17,7 +19,20 @@ func QueryNTS(ctx context.Context, host string) (Sample, error) {
     if err := ctx.Err(); err != nil { return sample, err }
     // NTS verifies the X.509 certificate, establishes TLS 1.3 NTS-KE
     // keys and verifies NTP AEAD and anti-replay token.
-    session, err := nts.NewSessionWithOptions(host, &nts.SessionOptions{Timeout: 3 * time.Second})
+    session, err := nts.NewSessionWithOptions(host, &nts.SessionOptions{
+        Timeout: 3 * time.Second,
+        // Bound the entire NTS-KE exchange, not just the TCP connection setup.
+        // Keep standard TLS hostname/certificate validation and the NTS ALPN.
+        Dialer: func(network, addr string, tlsConfig *tls.Config) (*tls.Conn, error) {
+            conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, network, addr, tlsConfig)
+            if err != nil { return nil, err }
+            if err = conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+                _ = conn.Close()
+                return nil, err
+            }
+            return conn, nil
+        },
+    })
     if err != nil { return sample, fmt.Errorf("NTS key exchange (%s): %w", host, err) }
     if err := ctx.Err(); err != nil { return sample, err }
     response, err := session.QueryWithOptions(&beevikntp.QueryOptions{Timeout: 2 * time.Second, Version: 4})
