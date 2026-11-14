@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: 'stable'
       - run: go test ./...
       - run: go vet ./...
       - name: Run race detector on Linux
@@ -110,7 +110,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: 'stable'
       - name: Compile and package Windows, Linux and macOS archives
         shell: bash
         run: |
