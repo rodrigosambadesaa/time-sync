@@ -1,5 +1,5 @@
 // Package ntp implements a small, defensive SNTP client (RFC 5905).
-// NTP packets are NOT authenticated; use only on trusted networks.
+// Query implements legacy unauthenticated SNTP. QueryNTS performs RFC 8915 authentication.
 package ntp
 
 import (
@@ -21,6 +21,7 @@ type Sample struct {
 	Offset  time.Duration `json:"offset_ns"`
 	RTT     time.Duration `json:"rtt_ns"`
 	Stratum uint8         `json:"stratum"`
+    Authenticated bool `json:"authenticated"`
 }
 
 // Query obtains one time sample, validating the server response and replay token.
