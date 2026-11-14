@@ -25,8 +25,13 @@ type Sample struct {
 
 // Query obtains one time sample, validating the server response and replay token.
 func Query(ctx context.Context, host string) (Sample, error) {
+	return queryAddr(ctx, host, net.JoinHostPort(host, "123"))
+}
+
+// queryAddr permits an isolated UDP test server without changing production port 123.
+func queryAddr(ctx context.Context, host, addr string) (Sample, error) {
 	result := Sample{Server: host}
-	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "udp", net.JoinHostPort(host, "123"))
+	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "udp", addr)
 	if err != nil {
 		return result, err
 	}
@@ -39,7 +44,7 @@ func Query(ctx context.Context, host string) (Sample, error) {
 		return result, err
 	}
 	var request [48]byte
-	request[0] = 0x23 // version 4, client mode 3
+	request[0] = 0x23
 	t1 := time.Now().UTC()
 	putTimestamp(request[40:48], t1)
 	if _, err := conn.Write(request[:]); err != nil {
@@ -64,7 +69,6 @@ func Query(ctx context.Context, host string) (Sample, error) {
 	if bytes.Equal(p[32:40], make([]byte, 8)) || bytes.Equal(p[40:48], make([]byte, 8)) {
 		return result, errors.New("missing server timestamps")
 	}
-	// The server's reported dispersion (16.16 fixed point) must be plausible.
 	if binary.BigEndian.Uint32(p[8:12]) > 2<<16 {
 		return result, errors.New("unreliable NTP root dispersion")
 	}
@@ -79,7 +83,7 @@ func Query(ctx context.Context, host string) (Sample, error) {
 	}
 	if rtt < 0 {
 		rtt = 0
-	} // Small negative values are possible due to quantization.
+	}
 	result.Offset = (t2.Sub(t1) + t3.Sub(t4)) / 2
 	result.RTT = rtt
 	result.Stratum = p[1]
@@ -90,11 +94,9 @@ func putTimestamp(out []byte, t time.Time) {
 	binary.BigEndian.PutUint32(out[0:4], uint32(t.Unix()+epoch))
 	binary.BigEndian.PutUint32(out[4:8], uint32((uint64(t.Nanosecond())<<32)/1_000_000_000))
 }
-
 func parseTimestamp(raw []byte, reference time.Time) time.Time {
 	seconds := int64(binary.BigEndian.Uint32(raw[:4]))
 	referenceNTP := reference.Unix() + epoch
-	// Select the NTP era nearest to the local clock, including the 2036 wrap.
 	era := (referenceNTP - seconds + (1 << 31)) >> 32
 	unix := seconds + (era << 32) - epoch
 	nanos := int64(float64(binary.BigEndian.Uint32(raw[4:8])) * 1e9 / 4294967296.0)

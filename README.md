@@ -1,60 +1,115 @@
-# TimeSync for Windows 11
+# TimeSync — Windows, Linux and macOS
 
-A small, open-source, **no-third-party-dependencies** Windows clock synchronizer. Uses a native Win32 call (`SetSystemTime`) after a defensive NTPv4/SNTP time measurement; no browser scraping, cloud account, telemetry, or long-running background service.
+TimeSync is a small, open-source **Go standard-library-only** clock synchronizer for Windows, Linux and macOS (x64 and ARM64). It consults several NTPv4/SNTP servers, validates replies and requires a close consensus before adjusting system time. It does not scrape websites, collect telemetry, or require a cloud account.
 
-> **Time.is is a comparison reference, not a public NTP service.** Time.is recommends using a nearby NTP time server for the computer clock (https://time.is/FAQ). TimeSync does **not** claim to connect to an official Time.is API or to have sub-millisecond accuracy. Compare the result visually at https://time.is/.
+> **Time.is is a manual visual comparison, not an NTP source.** TimeSync does not use a Time.is API and makes no guarantee of sub-millisecond accuracy. Visit https://time.is/ to compare clocks.
 
-## Features
+## Security and behavior
 
-- Two native Task Scheduler tasks: `TimeSync-OnBoot` (~30 seconds after startup) and `TimeSync-Periodic` (repeats **every minute by default** indefinitely), even when no user logs in. The interval is configurable during installation.
-- Works as Windows **SYSTEM** because correcting the computer clock needs the system-time privilege.
-- Parallel queries to four distinct NTP names, validated responses (NTP mode, leap/stratum, origin token, dispersion, round-trip delay) and **2+ server consensus**; rejects disagreements >150 ms.
-- UTC clock correction with millisecond resolution. Every successful consensus check applies a correction; any correction >10 minutes is refused.
-- Self-contained Windows x64 and ARM64 executables, zero Go runtime installation, offline uninstall.
-- Minimal status in `%ProgramData%\TimeSync\status.json` (no personal data); no network access except NTP over UDP/123.
+- Parallel NTP/UDP 123 exchanges with unique server hostnames; validates NTP server mode, leap/stratum, original request timestamp, root dispersion and latency.
+- Requires at least two distinct servers with offsets within 150 ms; discards outliers. Refuses to move the clock more than 10 minutes by default (`-max-step`).
+- `-mode check` measures and reports offset **without changing the system clock or writing a status file**. `-mode sync` applies the correction and records status.
+- Each correction **steps** the OS clock (it is not gradual slewing). The schedule is every minute by default and is configurable at install time.
+- Prebuilt, self-contained x64 and ARM64 executables for all three operating systems. Verify the release ZIP against `SHA256SUMS.txt`.
 
-## Install
+**Important:** NTP is **not cryptographically authenticated** here. Two agreeing servers do not protect against an on-path attacker. Do not deploy this on domain-managed, security-critical or regulated systems; use a managed, authenticated time source instead. UDP/123 and DNS must be reachable. **Do not run TimeSync alongside Windows Time, systemd-timesyncd, chrony, ntpd or macOS automatic network time.** Installers never disable those existing services automatically. The Linux installer rejects a running common Linux time service; the macOS installer checks the automatic network-time setting. If sources disagree, no clock change is made.
 
-1. Download the release ZIP for your processor from **Releases**, and compare its SHA-256 with `SHA256SUMS.txt`.
-2. **Extract the ZIP into a local folder you trust**. Do not run scripts directly from a compressed archive.
-3. Open **Windows PowerShell as Administrator** in the extracted folder and run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`. v0.1.2 additionally replaces the invalid XML `LogonType` with native `schtasks` registration and tests installation on a Windows runner.
-4. Inspect Task Scheduler for `TimeSync-Periodic` and `TimeSync-OnBoot`. Both tasks execute the installed binary from `%ProgramFiles%\TimeSync` as SYSTEM. The periodic task is configured to run the missed check when Windows resumes from sleep or hibernation, without waking the computer every minute. The installer also starts the first sync immediately.
-5. Monitor `%ProgramData%\TimeSync\status.json` and compare https://time.is/ after the first successful sync.
+## Download and check
 
-The default interval is one minute. To choose a custom interval, pass `-Interval` when installing; use a number followed by `m`, `h` or `d`, or `HH:MM:SS`:
+Download the matching ZIP from [Releases](https://github.com/rodrigosambadesaa/time-sync/releases):
+
+| Operating system | Architecture | Archive |
+|---|---|---|
+| Windows | x64 / ARM64 | `time-sync-windows-amd64.zip` / `time-sync-windows-arm64.zip` |
+| Linux | x64 / ARM64 | `time-sync-linux-amd64.zip` / `time-sync-linux-arm64.zip` |
+| macOS | Intel / Apple Silicon | `time-sync-darwin-amd64.zip` / `time-sync-darwin-arm64.zip` |
+
+Extract the ZIP into a trusted local folder first. On Linux or macOS, check the downloaded archive's SHA-256 with `shasum -a 256 archive.zip` (or `sha256sum archive.zip` on Linux), then compare with `SHA256SUMS.txt`.
+
+## Windows 11
+
+Open PowerShell **as Administrator** in the extracted folder:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Interval 1m
 ```
 
-Intervals from 1 minute through 23 hours 59 minutes are accepted; use a whole number of minutes because the installer uses Task Scheduler's native minute trigger. Re-running the installer updates the existing scheduled task. At one minute, four small NTP exchanges per check are still negligible compared with normal Internet traffic.
-
-Check without changing the clock: `& "$env:ProgramFiles\TimeSync\time-sync.exe" -mode check`.
-
-Uninstall as Administrator: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1` (optional `-RemoveStatus`).
-
-## Technical behavior / safety limitations
-
-The **NTP protocol is not authenticated** here; MITM attacks and compromised servers cannot be completely excluded. Consensus and the 10-minute step cap reduce, but do not eliminate, risk. Do not use this for financial, industrial, security-critical or domain-joined timekeeping. Installation is intentionally blocked on Active Directory domain-joined PCs. A regular PC may already synchronize via the built-in Windows Time service; avoid deploying multiple competing time agents. NTP/UDP port 123 must be available; if blocked, the program leaves the clock untouched and reports a failure. It also leaves the clock untouched if sources disagree.
-
-Every scheduled run re-measures the offset and applies the consensus correction, even when it is only a few milliseconds. **Each correction steps** the Windows clock rather than gradually slewing it; the 10-minute safety cap remains in force. This can introduce small clock steps and affect software that relies on wall-clock time; Windows' monotonic clocks remain preferable for measuring elapsed time.
-
-The default peers are `time.cloudflare.com`, `time.windows.com`, `0.es.pool.ntp.org` and `1.es.pool.ntp.org`. You can run a manual check with `-servers "a.example,b.example"`, but the scheduled task uses the built-in defaults. Time.is's own nominal web precision is typically about 20–100 ms, not a hard guarantee.
-
-## Developer commands
+This installs `%ProgramFiles%\TimeSync\time-sync.exe` and registers `TimeSync-OnBoot` and `TimeSync-Periodic` Task Scheduler tasks running as SYSTEM. Check `%ProgramData%\TimeSync\status.json` after the first run; the periodic task also catches up after sleep. The installer blocks domain-joined PCs.
 
 ```powershell
-go test ./...
-go vet ./...
-$env:GOOS='windows'; $env:GOARCH='amd64'; go build -trimpath -o time-sync.exe ./cmd/time-sync
+& "$env:ProgramFiles\TimeSync\time-sync.exe" -mode check
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 ```
 
-The `release.yml` workflow tests on Windows/Linux, validates PowerShell syntax, cross-compiles x64/ARM64, runs an actual Windows scheduled-task install/uninstall test, and publishes releases after a passing push to `main` (if absent). Later versions may be released by workflow dispatch with a version input.
+Pass `-RemoveStatus` to the uninstaller to delete saved status information.
+
+## Linux (systemd)
+
+Requires a Linux distribution using systemd, root privileges for installation and `CAP_SYS_TIME` to adjust the clock. **First disable any pre-existing NTP service yourself**; for example, inspect `timedatectl` and `systemctl status systemd-timesyncd chrony` and follow your distribution's documented process. The installer refuses to proceed if it finds an active common time-sync service.
+
+From the extracted ZIP:
+
+```bash
+sudo bash ./install-linux.sh --interval 1m
+systemctl status time-sync.timer
+sudo journalctl -u time-sync.service --no-pager -n 30
+/usr/local/libexec/time-sync/time-sync -mode check
+```
+
+This installs the binary in `/usr/local/libexec/time-sync/`, a root-owned oneshot `time-sync.service` and a `time-sync.timer` running shortly after boot and periodically. The state file is `/var/lib/time-sync/status.json`. Only `-mode sync` requires clock-setting privileges; `-mode check` does not.
+
+```bash
+sudo bash ./uninstall-linux.sh
+# Optional removal of the status directory:
+sudo bash ./uninstall-linux.sh --remove-status
+```
+
+The installer does **not** change other time services; consider restoring your distribution's default time synchronization after uninstalling.
+
+## macOS (launchd)
+
+Requires root privileges for installation. On macOS, first disable **Set time and date automatically** in System Settings. TimeSync creates a root-owned LaunchDaemon (running at load and at the configured interval) and uses the Unix `settimeofday` system call.
+
+```bash
+sudo bash ./install-macos.sh --interval 1m
+sudo launchctl print system/com.rodrigosambadesaa.time-sync
+/usr/local/libexec/time-sync/time-sync -mode check
+cat /var/db/time-sync/status.json
+```
+
+The installed binary is `/usr/local/libexec/time-sync/time-sync`; the configuration is `/Library/LaunchDaemons/com.rodrigosambadesaa.time-sync.plist`. To uninstall:
+
+```bash
+sudo bash ./uninstall-macos.sh
+# Optional removal of saved status:
+sudo bash ./uninstall-macos.sh --remove-status
+```
+
+Re-enable Apple's automatic time service afterward if desired. The installer does not adjust macOS time-service preferences. macOS may deny clock-setting even to elevated processes under managed security policies; failures are surfaced in the result and status file.
+
+## Running manually
+
+```bash
+./time-sync -mode check
+sudo ./time-sync -mode sync
+./time-sync -mode check -servers "time.cloudflare.com,time.google.com,0.pool.ntp.org"
+```
+
+Use the `.exe` suffix on Windows. Servers must be 2–8 distinct nonempty hostnames. A local check is non-privileged and never modifies the clock. Both Linux and macOS installations accept `--interval Nm`, with whole minutes `1m`–`1439m`.
+
+## Verification and limitations
+
+CI tests Go logic on Linux, Windows and macOS, exercises a synthetic local UDP NTP server, tests decision-making with a mocked clock setter (including refusal cases), validates installer formats, runs a Windows scheduled-task installation smoke test, and cross-compiles all six release binaries. Tests **do not actually move the macOS/Linux hosted runner's clock** or exercise every distribution's systemd/launchd installation; perform a supervised `sudo ... -mode sync` check on each production platform after disabling competing time agents. A successful cross-compilation alone is not proof of privileged clock updates.
+
+Developer commands:
+
+```bash
+go test ./...
+go vet ./...
+go test -race ./... # Linux
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./cmd/time-sync
+```
 
 ## License
 
-MIT; see [LICENSE](LICENSE).
-
-## Upgrading from v0.1.0 or v0.1.1
-
-Extract the new ZIP into a *new* directory and rerun `install.ps1` as Administrator. The installer replaces the binary and registers both tasks. Uninstall removes both tasks; no reboot is required. SHA256 checksums change with each release.
+MIT, see [LICENSE](LICENSE).

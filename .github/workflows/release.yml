@@ -1,4 +1,4 @@
-name: CI and Windows release
+name: CI and multi-platform release
 on:
   push:
     branches: [main]
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'New release version (e.g. v0.2.0); must not exist'
+        description: 'New release version (e.g. v0.2.1); must not exist'
         required: true
         type: string
 permissions:
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +25,39 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
       - run: go vet ./...
-      - name: Validate PowerShell installer syntax
+      - name: Run race detector on Linux
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+      - name: Build and smoke-test native executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/time-sync"
+          if [[ "$RUNNER_OS" == Windows ]]; then output="$output.exe"; fi
+          go build -trimpath -o "$output" ./cmd/time-sync
+          set +e
+          "$output" -mode invalid > "$RUNNER_TEMP/time-sync-out.txt" 2>&1
+          code=$?
+          set -e
+          if [[ "$code" != 2 ]]; then echo "Expected usage exit 2; got $code"; exit 1; fi
+      - name: Validate Linux installer and systemd units
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n install-linux.sh uninstall-linux.sh
+          sed 's/@INTERVAL@/1/g' packaging/linux/time-sync.timer.in > "$RUNNER_TEMP/time-sync.timer"
+          sed 's|/usr/local/libexec/time-sync/time-sync|/bin/true|' packaging/linux/time-sync.service > "$RUNNER_TEMP/time-sync.service"
+          systemd-analyze verify "$RUNNER_TEMP/time-sync.service" "$RUNNER_TEMP/time-sync.timer"
+      - name: Validate macOS installer and launchd plist
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n install-macos.sh uninstall-macos.sh
+          sed 's/@INTERVAL_SECONDS@/60/g' packaging/macos/com.rodrigosambadesaa.time-sync.plist.in > "$RUNNER_TEMP/time-sync.plist"
+          plutil -lint "$RUNNER_TEMP/time-sync.plist"
+      - name: Validate Windows PowerShell installer syntax
         if: runner.os == 'Windows'
         shell: powershell
         run: |
@@ -34,11 +66,9 @@ jobs:
             $tokens = $null
             $parseErrors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
-            if ($parseErrors.Count -gt 0) {
-              throw ("Invalid PowerShell syntax in {0}: {1}" -f $file, ($parseErrors -join '; '))
-            }
+            if ($parseErrors.Count -gt 0) { throw ("Invalid PowerShell syntax in {0}: {1}" -f $file, ($parseErrors -join '; ')) }
           }
-      - name: Install and uninstall scheduled tasks on a Windows runner
+      - name: Install and uninstall scheduled tasks on Windows runner
         if: runner.os == 'Windows'
         shell: powershell
         run: |
@@ -54,29 +84,19 @@ jobs:
               $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
               if ($task.State -eq 'Disabled') { throw "Task $name is disabled." }
               if ($task.Actions[0].Execute.Trim('"') -ne $installed) { throw "Task $name has an unexpected executable: $($task.Actions[0].Execute)" }
-              if ($task.Principal.UserId -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM|S-1-5-18)$') {
-                throw "Task $name does not run as SYSTEM."
-              }
+              if ($task.Principal.UserId -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM|S-1-5-18)$') { throw "Task $name does not run as SYSTEM." }
             }
             $periodic = Get-ScheduledTask -TaskName 'TimeSync-Periodic'
             $startup = Get-ScheduledTask -TaskName 'TimeSync-OnBoot'
-            if (-not $periodic.Settings.StartWhenAvailable) {
-              throw 'Periodic task is not configured to run after resume.'
-            }
-            if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) {
-              throw 'Periodic trigger is missing.'
-            }
-            if (-not ($startup.Triggers | Where-Object { $_.CimClass.CimClassName -match 'BootTrigger' })) {
-              throw 'Startup trigger is missing.'
-            }
+            if (-not $periodic.Settings.StartWhenAvailable) { throw 'Periodic task is not configured to run after resume.' }
+            if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) { throw 'Periodic trigger is missing.' }
+            if (-not ($startup.Triggers | Where-Object { $_.CimClass.CimClassName -match 'BootTrigger' })) { throw 'Startup trigger is missing.' }
           } finally {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
             if ($LASTEXITCODE -ne 0) { throw 'Uninstaller smoke test failed.' }
           }
           foreach ($name in @('TimeSync-Periodic', 'TimeSync-OnBoot')) {
-            if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
-              throw "Uninstaller left task $name registered."
-            }
+            if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) { throw "Uninstaller left task $name registered." }
           }
   release:
     if: github.event_name != 'pull_request'
@@ -91,16 +111,30 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build and package self-contained binaries
+      - name: Compile and package Windows, Linux and macOS archives
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/amd64 dist/arm64
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/amd64/time-sync.exe ./cmd/time-sync
-          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/arm64/time-sync.exe ./cmd/time-sync
-          zip -j time-sync-windows-amd64.zip dist/amd64/time-sync.exe install.ps1 uninstall.ps1 README.md LICENSE
-          zip -j time-sync-windows-arm64.zip dist/arm64/time-sync.exe install.ps1 uninstall.ps1 README.md LICENSE
-          sha256sum time-sync-windows-*.zip > SHA256SUMS.txt
+          for os in windows linux darwin; do
+            for arch in amd64 arm64; do
+              folder="dist/$os-$arch"
+              mkdir -p "$folder"
+              filename=time-sync
+              if [[ "$os" == windows ]]; then filename=time-sync.exe; fi
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$folder/$filename" ./cmd/time-sync
+              archive="time-sync-$os-$arch.zip"
+              case "$os" in
+                windows) zip -q -j "$archive" "$folder/$filename" install.ps1 uninstall.ps1 README.md LICENSE ;;
+                linux)
+                  zip -q -j "$archive" "$folder/$filename" install-linux.sh uninstall-linux.sh README.md LICENSE
+                  zip -q "$archive" packaging/linux/time-sync.service packaging/linux/time-sync.timer.in ;;
+                darwin)
+                  zip -q -j "$archive" "$folder/$filename" install-macos.sh uninstall-macos.sh README.md LICENSE
+                  zip -q "$archive" packaging/macos/com.rodrigosambadesaa.time-sync.plist.in ;;
+              esac
+            done
+          done
+          sha256sum time-sync-*.zip > SHA256SUMS.txt
       - name: Publish only a new version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -110,7 +144,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version='v0.1.2'
+          version='v0.2.0'
           if [[ "$EVENT" == workflow_dispatch ]]; then
             version="$INPUT_VERSION"
             if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -121,6 +155,6 @@ jobs:
             echo "Release $version already exists; leaving it unchanged."
             exit 0
           fi
-          gh release create "$version" time-sync-windows-amd64.zip time-sync-windows-arm64.zip SHA256SUMS.txt \
+          gh release create "$version" time-sync-*.zip SHA256SUMS.txt \
             --repo "$REPO" --target "$GITHUB_SHA" --title "TimeSync $version" \
-            --notes 'Windows 11 clock synchronization via validated NTP consensus. Installs a SYSTEM task on startup and every five minutes. Time.is is a manual visual comparison reference, not a time data source. Install: extract ZIP, check SHA256SUMS.txt, and run install.ps1 as Administrator. Unsigned binaries; inspect the source and Actions build before use.'
+            --notes 'Cross-platform Windows, Linux and macOS NTP consensus synchronizer. Native x64/ARM64 binaries, OS-specific installers and scheduled execution. Check SHA256SUMS.txt; disable competing OS time synchronization manually before installing Linux/macOS. No cryptographic NTP authentication; do not use for security-critical clocks.'
