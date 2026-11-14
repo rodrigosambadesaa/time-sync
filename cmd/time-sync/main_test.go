@@ -1,0 +1,71 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"github.com/rodrigosambadesaa/time-sync/internal/ntp"
+	"strings"
+	"testing"
+	"time"
+)
+
+func fakeQuery(offsets map[string]time.Duration) queryFunc {
+	return func(_ context.Context, s string) (ntp.Sample, error) {
+		off, ok := offsets[s]
+		if !ok {
+			return ntp.Sample{Server: s}, errors.New("offline")
+		}
+		return ntp.Sample{Server: s, Offset: off}, nil
+	}
+}
+func TestCheckNeverSetsSystemClock(t *testing.T) {
+	calls := 0
+	status, n, err := synchronize(context.Background(), []string{"a", "b", "c"}, "check", 10*time.Minute, fakeQuery(map[string]time.Duration{"a": 10 * time.Millisecond, "b": 12 * time.Millisecond, "c": 2 * time.Second}), func(time.Duration) error { calls++; return nil })
+	if err != nil || n != 2 || status.Applied || calls != 0 || status.OffsetMilliseconds != 11 {
+		t.Fatalf("status=%+v n=%d calls=%d err=%v", status, n, calls, err)
+	}
+}
+func TestSyncCallsClockOnlyAfterConsensus(t *testing.T) {
+	calls := 0
+	status, n, err := synchronize(context.Background(), []string{"a", "b"}, "sync", time.Minute, fakeQuery(map[string]time.Duration{"a": 20 * time.Millisecond, "b": 20 * time.Millisecond}), func(off time.Duration) error {
+		calls++
+		if off != 20*time.Millisecond {
+			t.Errorf("offset=%s", off)
+		}
+		return nil
+	})
+	if err != nil || n != 2 || !status.Applied || calls != 1 {
+		t.Fatalf("status=%+v n=%d calls=%d err=%v", status, n, calls, err)
+	}
+}
+func TestSyncRejectsExcessiveOffset(t *testing.T) {
+	calls := 0
+	status, _, err := synchronize(context.Background(), []string{"a", "b"}, "sync", time.Second, fakeQuery(map[string]time.Duration{"a": 5 * time.Second, "b": 5 * time.Second}), func(time.Duration) error { calls++; return nil })
+	if err == nil || calls != 0 || status.Applied || !strings.Contains(status.Error, "unsafe offset") {
+		t.Fatalf("status=%+v calls=%d err=%v", status, calls, err)
+	}
+}
+func TestSyncRejectsInconsistentServers(t *testing.T) {
+	calls := 0
+	status, _, err := synchronize(context.Background(), []string{"a", "b"}, "sync", time.Minute, fakeQuery(map[string]time.Duration{"a": 0, "b": time.Second}), func(time.Duration) error { calls++; return nil })
+	if err == nil || calls != 0 || status.Applied {
+		t.Fatalf("status=%+v calls=%d err=%v", status, calls, err)
+	}
+}
+func TestClockErrorPropagates(t *testing.T) {
+	denied := errors.New("permission denied")
+	status, _, err := synchronize(context.Background(), []string{"a", "b"}, "sync", time.Minute, fakeQuery(map[string]time.Duration{"a": 0, "b": 0}), func(time.Duration) error { return denied })
+	if !errors.Is(err, denied) || status.Applied || status.Error != "permission denied" {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}
+func TestServerValidation(t *testing.T) {
+	for _, v := range []string{"a", "a,a", "a,", "a,a,b", "a,b,c,d,e,f,g,h,i"} {
+		if _, err := validateServers(v); err == nil {
+			t.Errorf("accepted %q", v)
+		}
+	}
+	if got, err := validateServers(" a , b "); err != nil || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("got=%v err=%v", got, err)
+	}
+}

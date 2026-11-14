@@ -1,0 +1,11 @@
+[Unit]
+Description=Run TimeSync at boot and every @INTERVAL@ minutes
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=@INTERVAL@m
+AccuracySec=1s
+Unit=time-sync.service
+
+[Install]
+WantedBy=timers.target
