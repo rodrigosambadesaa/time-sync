@@ -18,6 +18,7 @@ import (
 type result struct {
 	AtUTC time.Time `json:"at_utc"`
     Security string `json:"security"`
+    Target string `json:"target,omitempty"`
     AuthenticatedServers int `json:"authenticated_servers"`
 	OffsetMilliseconds float64      `json:"offset_ms"`
 	Applied            bool         `json:"applied"`
@@ -133,6 +134,7 @@ func main() {
 	peers := flag.String("servers", "", "comma-separated time server hosts (defaults depend on -auth)")
     auth := flag.String("auth", "nts", "nts (cryptographically authenticated, default) or insecure")
     allowInsecure := flag.Bool("allow-insecure", false, "explicitly opt into unauthenticated legacy NTP")
+    sshTarget := flag.String("target-ssh", "", "root@host for a jailbroken iOS device reachable through trusted SSH (sync only)")
 	maxStep := flag.Duration("max-step", 10*time.Minute, "refuse clock corrections larger than this")
 	flag.Parse()
 	if *mode != "sync" && *mode != "check" {
@@ -154,6 +156,16 @@ func main() {
             *peers = "time.cloudflare.com,time.windows.com,0.es.pool.ntp.org,1.es.pool.ntp.org"
         }
     }
+    if *sshTarget != "" {
+        if *mode != "sync" {
+            fmt.Fprintln(os.Stderr, "-target-ssh requires -mode sync; -mode check measures the controller only")
+            os.Exit(2)
+        }
+        if err := validateSSHTarget(*sshTarget); err != nil {
+            fmt.Fprintln(os.Stderr, err)
+            os.Exit(2)
+        }
+    }
     if *maxStep <= 0 {
 		fmt.Fprintln(os.Stderr, "-max-step must be positive")
 		os.Exit(2)
@@ -167,7 +179,14 @@ func main() {
 	defer cancel()
 	query := ntp.QueryNTS
     if *auth == "insecure" { query = ntp.Query }
-    status, agreed, err := synchronize(ctx, servers, *mode, *maxStep, *auth == "nts", query, setClock)
+    apply := setClock
+    if *sshTarget != "" {
+        apply = func(offset time.Duration) error {
+            return setRemoteClock(offset, *maxStep, sshRunner(*sshTarget))
+        }
+    }
+    status, agreed, err := synchronize(ctx, servers, *mode, *maxStep, *auth == "nts", query, apply)
+    if *sshTarget != "" { status.Target = *sshTarget }
 	if *mode == "sync" {
 		writeStatus(status)
 	}
