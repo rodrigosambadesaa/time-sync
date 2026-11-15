@@ -67,9 +67,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for arch in amd64 arm64; do
-            CGO_ENABLED=0 GOOS=android GOARCH="$arch" go build -trimpath -o "$RUNNER_TEMP/time-sync-android-$arch" ./cmd/time-sync
-          done
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -trimpath -o "$RUNNER_TEMP/time-sync-android-arm64" ./cmd/time-sync
       - name: Validate Linux installer and systemd units
         if: runner.os == 'Linux'
         shell: bash
@@ -154,6 +152,7 @@ jobs:
           set -euo pipefail
           for os in windows linux darwin android; do
             for arch in amd64 arm64; do
+              if [[ "$os" == android && "$arch" != arm64 ]]; then continue; fi
               folder="dist/$os-$arch"
               mkdir -p "$folder"
               filename=time-sync
@@ -195,4 +194,4 @@ jobs:
           fi
           gh release create "$version" time-sync-*.zip SHA256SUMS.txt \
             --repo "$REPO" --target "$GITHUB_SHA" --title "TimeSync $version" \
-            --notes 'Authenticated NTS TimeSync for Windows, Linux, macOS and rooted Android (amd64/arm64); SSH controller support for jailbroken iPhone/iPad only. No iOS IPA and no clock-setting on stock iOS. Two agreeing authenticated providers required; no silent insecure fallback. Android root + CAP_SYS_TIME + SELinux allowance required, jailbroken iOS requires privileged date and verified key-based root SSH. Mobile privileged clock adjustment was not tested on physical devices. Check SHA256SUMS.txt; avoid conflicting automatic time daemons. Not approved for safety-critical clocks.'
+            --notes 'Authenticated NTS TimeSync for Windows, Linux, macOS and rooted Android (arm64); SSH controller support for jailbroken iPhone/iPad only. No iOS IPA and no clock-setting on stock iOS. Two agreeing authenticated providers required; no silent insecure fallback. Android root + CAP_SYS_TIME + SELinux allowance required, jailbroken iOS requires privileged date and verified key-based root SSH. Mobile privileged clock adjustment was not tested on physical devices. Check SHA256SUMS.txt; avoid conflicting automatic time daemons. Not approved for safety-critical clocks.'

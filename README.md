@@ -1,6 +1,6 @@
 # TimeSync — authenticated network time for Windows, Linux, macOS and rooted Android
 
-TimeSync adjusts **the operating system's software clock**, not external watches, hardware clocks, or every embedded device. It supports Windows, Linux and macOS (amd64 and arm64), plus rooted Android (arm64 and amd64 command-line builds). A jailbroken iPhone/iPad can be synchronized remotely over authenticated SSH from a Windows/Linux/macOS controller; ordinary iOS/iPadOS applications cannot set the system time.
+TimeSync adjusts **the operating system's software clock**, not external watches, hardware clocks, or every embedded device. It supports Windows, Linux and macOS (amd64 and arm64), plus rooted Android (arm64 command-line build). A jailbroken iPhone/iPad can be synchronized remotely over authenticated SSH from a Windows/Linux/macOS controller; ordinary iOS/iPadOS applications cannot set the system time.
 
 **Starting with v0.3.0, [RFC 8915 Network Time Security (NTS)](https://www.rfc-editor.org/rfc/rfc8915.html) is the default.** A TLS 1.3 NTS key exchange authenticates the server, and authenticated encryption (AEAD) protects the NTP response. A TLS handshake **alone** is insufficient; TimeSync accepts samples only after the authenticated NTP response passes verification.
 
@@ -19,7 +19,7 @@ NTS uses the maintained third-party [beevik/nts](https://github.com/beevik/nts) 
 
 ## Downloads and verification
 
-Download the correct `time-sync-{windows,linux,darwin,android}-{amd64,arm64}.zip` from [Releases](https://github.com/rodrigosambadesaa/time-sync/releases). Compare the SHA-256 digest of the archive with `SHA256SUMS.txt`, then extract into a trusted local directory. Binaries are not code-signed; review the source and GitHub Actions provenance before privileged installation.
+Download the correct `time-sync-{windows,linux,darwin}-{amd64,arm64}.zip or time-sync-android-arm64.zip` from [Releases](https://github.com/rodrigosambadesaa/time-sync/releases). Compare the SHA-256 digest of the archive with `SHA256SUMS.txt`, then extract into a trusted local directory. Binaries are not code-signed; review the source and GitHub Actions provenance before privileged installation.
 
 ## Installation
 
@@ -69,11 +69,11 @@ Status: `/var/db/time-sync/status.json`. Re-enable Apple's time service when uni
 Use the `time-sync-android-arm64.zip` archive for most modern rooted phones. The Android executable runs locally on-device; it is **not** an APK, Android service or Play Store app. Obtain a trusted root shell (for example via an already-configured Magisk `su`), copy the executable into a private, executable directory, and run it under root:
 
 ```sh
-su -c '/data/local/tmp/time-sync -mode check'
-su -c '/data/local/tmp/time-sync -mode sync -max-step 2s'
+su -c '/data/adb/time-sync/time-sync -mode check'
+su -c '/data/adb/time-sync/time-sync -mode sync -max-step 2s'
 ```
 
-The example executable path assumes you deliberately placed it there with appropriate owner/permissions; avoid globally writable executable files. Prefer a root-owned private directory where executable policies allow it. The clock is set via the Linux `settimeofday` syscall, subject to Android SELinux and `CAP_SYS_TIME`: **root does not guarantee success**. Status is stored at `/data/adb/time-sync/status.json` if that root-only path is available. Disable Android's automatic network time before testing so Android does not immediately overwrite the correction. No installer or always-on background process is provided; start with manual verification on your own device. Do not disable SELinux to make clock updates work.
+Install the binary in the root-owned `/data/adb/time-sync` directory using restrictive permissions (for example `0700`), not in a world-writable location. Check that the device permits execution from that directory. The clock is set via the Linux `settimeofday` syscall, subject to Android SELinux and `CAP_SYS_TIME`: **root does not guarantee success**. Status is stored at `/data/adb/time-sync/status.json` if that root-only path is available. Disable Android's automatic network time before testing so Android does not immediately overwrite the correction. No installer or always-on background process is provided; start with manual verification on your own device. Do not disable SELinux to make clock updates work.
 
 ### iPhone / iPad (jailbreak only, via SSH)
 
@@ -106,7 +106,7 @@ go vet ./...
 go test -race ./...  # Linux
 ```
 
-GitHub Actions runs these checks on Windows, Linux and macOS, verifies secure-mode rejection of unauthenticated/mixed-source samples and invalid NTS TLS certificates, smoke-tests CLI defaults, validates native installer formats, and builds all eight archives (six desktop plus two Android). Remote iOS tests use a fake SSH command runner, never a real device.
+GitHub Actions runs these checks on Windows, Linux and macOS, verifies secure-mode rejection of unauthenticated/mixed-source samples and invalid NTS TLS certificates, smoke-tests CLI defaults, validates native installer formats, and builds all seven archives (six desktop plus one Android). Remote iOS tests use a fake SSH command runner, never a real device.
 
 The automated tests **do not change the hosted runner's or a phone's real clock**, conduct formal NTS cryptography audits, validate every systemd/launchd configuration or prove regulatory/safety-critical fitness. Perform privileged synchronization tests on managed machines, with rollback and monitoring, before deployment.
 
