@@ -32,7 +32,7 @@ label='com.rodrigosambadesaa.time-sync'
 plist="/Library/LaunchDaemons/$label.plist"
 install -d -m 0755 /usr/local/libexec/time-sync
 install -m 0755 "$binary" /usr/local/libexec/time-sync/time-sync
-sed "s/@INTERVAL_SECONDS@/$((minutes*60))/g" "$script_dir/packaging/macos/$label.plist.in" > "$plist"
+bash "$script_dir/packaging/macos/render-calendar.sh" "$script_dir/packaging/macos/$label.plist.in" "$minutes" "$plist"
 chown root:wheel "$plist" /usr/local/libexec/time-sync/time-sync
 chmod 0644 "$plist"
 plutil -lint "$plist"
