@@ -77,13 +77,13 @@ jobs:
           sh -n packaging/linux/time-sync-resume
           fake_bin="$RUNNER_TEMP/time-sync-fakebin"
           mkdir -p "$fake_bin"
-          printf '%s\\n' '#!/bin/sh' 'echo "$*" >> "$HOOK_LOG"' > "$fake_bin/systemctl"
+          printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$HOOK_LOG"' > "$fake_bin/systemctl"
           chmod +x "$fake_bin/systemctl"
           export HOOK_LOG="$RUNNER_TEMP/time-sync-hook.log"
           PATH="$fake_bin:$PATH" sh packaging/linux/time-sync-resume pre hibernate
           test ! -e "$HOOK_LOG"
           PATH="$fake_bin:$PATH" sh packaging/linux/time-sync-resume post hibernate
-          grep -q -- '^--no-block start time-sync.service
+          grep -q -- '^--no-block start time-sync.service$' "$HOOK_LOG"
           sed 's/@INTERVAL@/1/g' packaging/linux/time-sync.timer.in > "$RUNNER_TEMP/time-sync.timer"
           sed 's|/usr/local/libexec/time-sync/time-sync|/bin/true|' packaging/linux/time-sync.service > "$RUNNER_TEMP/time-sync.service"
           systemd-analyze verify "$RUNNER_TEMP/time-sync.service" "$RUNNER_TEMP/time-sync.timer"
@@ -201,128 +201,6 @@ jobs:
         run: |
           set -euo pipefail
           version='v0.4.1'
-          if [[ "$EVENT" == workflow_dispatch ]]; then
-            version="$INPUT_VERSION"
-            if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo 'Version must follow vMAJOR.MINOR.PATCH' >&2; exit 1
-            fi
-          fi
-          if gh release view "$version" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release $version already exists; leaving it unchanged."
-            exit 0
-          fi
-          gh release create "$version" time-sync-*.zip SHA256SUMS.txt \
-            --repo "$REPO" --target "$GITHUB_SHA" --title "TimeSync $version" \
-            --notes 'Authenticated NTS TimeSync for Windows, Linux, macOS and rooted Android (arm64); SSH controller support for jailbroken iPhone/iPad only. No iOS IPA and no clock-setting on stock iOS. Two agreeing authenticated providers required; no silent insecure fallback. Android root + CAP_SYS_TIME + SELinux allowance required, jailbroken iOS requires privileged date and verified key-based root SSH. Mobile privileged clock adjustment was not tested on physical devices. Check SHA256SUMS.txt; avoid conflicting automatic time daemons. Not approved for safety-critical clocks.'
- "$HOOK_LOG"
-          sed 's/@INTERVAL@/1/g' packaging/linux/time-sync.timer.in > "$RUNNER_TEMP/time-sync.timer"
-          sed 's|/usr/local/libexec/time-sync/time-sync|/bin/true|' packaging/linux/time-sync.service > "$RUNNER_TEMP/time-sync.service"
-          systemd-analyze verify "$RUNNER_TEMP/time-sync.service" "$RUNNER_TEMP/time-sync.timer"
-      - name: Validate macOS installer and launchd plist
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash -n install-macos.sh uninstall-macos.sh
-          sed 's/@INTERVAL_SECONDS@/60/g' packaging/macos/com.rodrigosambadesaa.time-sync.plist.in > "$RUNNER_TEMP/time-sync.plist"
-          plutil -lint "$RUNNER_TEMP/time-sync.plist"
-      - name: Validate Windows PowerShell installer syntax
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($file in @('install.ps1', 'uninstall.ps1')) {
-            $tokens = $null
-            $parseErrors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file), [ref]$tokens, [ref]$parseErrors) | Out-Null
-            if ($parseErrors.Count -gt 0) { throw ("Invalid PowerShell syntax in {0}: {1}" -f $file, ($parseErrors -join '; ')) }
-          }
-      - name: Install and uninstall scheduled tasks on Windows runner
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $binary = Join-Path $env:RUNNER_TEMP 'time-sync-ci.exe'
-          go build -trimpath -o $binary ./cmd/time-sync
-          if ($LASTEXITCODE -ne 0) { throw 'Windows executable build failed.' }
-          try {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -BinaryPath $binary -SkipInitialRun
-            if ($LASTEXITCODE -ne 0) { throw 'Installer smoke test failed.' }
-            $installed = Join-Path $env:ProgramFiles 'TimeSync\time-sync.exe'
-            foreach ($name in @('TimeSync-Periodic', 'TimeSync-OnBoot')) {
-              $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
-              if ($task.State -eq 'Disabled') { throw "Task $name is disabled." }
-              if ($task.Actions[0].Execute.Trim('"') -ne $installed) { throw "Task $name has an unexpected executable: $($task.Actions[0].Execute)" }
-              if ($task.Principal.UserId -notmatch '^(SYSTEM|NT AUTHORITY\\SYSTEM|S-1-5-18)$') { throw "Task $name does not run as SYSTEM." }
-            }
-            $periodic = Get-ScheduledTask -TaskName 'TimeSync-Periodic'
-            $startup = Get-ScheduledTask -TaskName 'TimeSync-OnBoot'
-            if (-not $periodic.Settings.StartWhenAvailable) { throw 'Periodic task is not configured to run after resume.' }
-            if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) { throw 'Periodic trigger is missing.' }
-            if (-not ($startup.Triggers | Where-Object { $_.CimClass.CimClassName -match 'BootTrigger' })) { throw 'Startup trigger is missing.' }
-          } finally {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
-            if ($LASTEXITCODE -ne 0) { throw 'Uninstaller smoke test failed.' }
-          }
-          foreach ($name in @('TimeSync-Periodic', 'TimeSync-OnBoot')) {
-            if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) { throw "Uninstaller left task $name registered." }
-          }
-  release:
-    if: github.event_name != 'pull_request'
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-      - name: Resolve and verify NTS dependencies for release
-        shell: bash
-        run: |
-          set -euo pipefail
-          go mod tidy
-          go mod verify
-          git diff --exit-code -- go.mod go.sum
-      - name: Compile and package Windows, Linux, macOS and Android archives
-        shell: bash
-        run: |
-          set -euo pipefail
-          for os in windows linux darwin android; do
-            for arch in amd64 arm64; do
-              if [[ "$os" == android && "$arch" != arm64 ]]; then continue; fi
-              folder="dist/$os-$arch"
-              mkdir -p "$folder"
-              filename=time-sync
-              if [[ "$os" == windows ]]; then filename=time-sync.exe; fi
-              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags='-s -w' -o "$folder/$filename" ./cmd/time-sync
-              archive="time-sync-$os-$arch.zip"
-              case "$os" in
-                windows) zip -q -j "$archive" "$folder/$filename" install.ps1 uninstall.ps1 README.md LICENSE ;;
-                linux)
-                  zip -q -j "$archive" "$folder/$filename" install-linux.sh uninstall-linux.sh README.md LICENSE
-                  zip -q "$archive" packaging/linux/time-sync.service packaging/linux/time-sync.timer.in ;;
-                android) zip -q -j "$archive" "$folder/$filename" README.md LICENSE ;;
-                darwin)
-                  zip -q -j "$archive" "$folder/$filename" install-macos.sh uninstall-macos.sh README.md LICENSE
-                  zip -q "$archive" packaging/macos/com.rodrigosambadesaa.time-sync.plist.in ;;
-              esac
-            done
-          done
-          sha256sum time-sync-*.zip > SHA256SUMS.txt
-      - name: Publish only a new version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          EVENT: ${{ github.event_name }}
-          INPUT_VERSION: ${{ inputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version='v0.4.0'
           if [[ "$EVENT" == workflow_dispatch ]]; then
             version="$INPUT_VERSION"
             if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
