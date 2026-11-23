@@ -113,3 +113,43 @@ The automated tests **do not change the hosted runner's or a phone's real clock*
 ## License
 
 MIT; see [LICENSE](LICENSE).
+
+## Wake and hibernation recovery (v0.4.1)
+
+The installer now registers additional wake-aware scheduling. Network Time
+Security (NTS) remains mandatory by default. When Wi-Fi/DNS/VPN need to reconnect,
+wake-triggered synchronization retries failed secure attempts for **up to 45
+seconds**, without allowing insecure fallback or bypassing two-source consensus.
+
+- **Windows 10/11:** `TimeSync-OnResume` listens for System events from
+  Power-Troubleshooter (ID 1) and Kernel-Power (ID 107). It starts a secure
+  synchronization upon wake instead of waiting for `TimeSync-Periodic`.
+  Update by extracting the new release and running an elevated
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1 -Interval 1m`.
+  Verify with `Get-ScheduledTask -TaskName 'TimeSync-*'` and inspect
+  `Get-Content "$env:ProgramData\\TimeSync\\status.json"`.
+- **Linux/systemd:** A root-owned post-resume system-sleep hook queues
+  `time-sync.service` via `systemctl --no-block`. It intentionally performs
+  **no networking inside the systemd-sleep hook**. Reinstall using
+  `sudo bash ./install-linux.sh --interval 1m` and inspect
+  `sudo journalctl -u time-sync.service --no-pager -n 40`.
+- **macOS:** A wake-aware `StartCalendarInterval` replaces the previous
+  `StartInterval`, which can miss triggers during sleep. Reinstall with
+  `sudo bash ./install-macos.sh --interval 1m`. For intervals not dividing
+  one hour, the calendar is aligned to midnight and the final daily interval
+  can be shorter.
+- **Android (rooted) and iOS (jailbroken):** The manual Android CLI and
+  remote SSH iOS controller remain unchanged; neither has a background
+  wake-resume integration.
+
+For diagnosis, `time-sync -mode check` reports authenticated NTS offsets
+without setting the clock; `time-sync -mode sync -retry-window 45s` retries
+temporary failures while staying within the existing `-max-step` bound.
+The default remains a single attempt when `-retry-window` is omitted.
+**Neither six-millisecond absolute accuracy nor zero wake latency is
+guaranteed:** a valid NTS sample needs network access and corroboration.
+
+CI checks the Windows event subscription, mocks the Linux post-resume hook,
+validates launchd calendar rendering on macOS, and runs Go tests on all three.
+Hosted CI cannot actually hibernate hardware or validate its privileged clock
+precision; perform a controlled resume test on a managed machine.
