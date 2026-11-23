@@ -45,6 +45,7 @@ $BinaryPath = [System.IO.Path]::GetFullPath($BinaryPath)
 $intervalTaskName = 'TimeSync-Periodic'
 $legacyIntervalTaskName = 'TimeSync-FiveMinutes'
 $bootTaskName = 'TimeSync-OnBoot'
+$resumeTaskName = 'TimeSync-OnResume'
 $installDir = Join-Path $env:ProgramFiles 'TimeSync'
 $target = Join-Path $installDir 'time-sync.exe'
 
@@ -80,12 +81,23 @@ $startupResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $start
 if ($startupResult.ExitCode -ne 0) {
     throw "Failed to register startup task (exit code $($startupResult.ExitCode))."
 }
+# A dedicated event task catches resume from sleep or hibernation without
+# waiting for the periodic timer. Both Event ID 1 and 107 are used because
+# Windows installations differ in their resume event logging.
+$wakeXPath = "*[System[(Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1) or (Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=107)]]"
+$wakeCommand = $taskCommand + ' -retry-window 45s'
+$wakeTaskArgs = '/Create /TN "{0}" /TR "{1}" /SC ONEVENT /EC System /MO "{2}" /RU SYSTEM /RL HIGHEST /F' -f $resumeTaskName, $wakeCommand, $wakeXPath
+$wakeResult = Start-Process -FilePath $scheduledTasksExe -ArgumentList $wakeTaskArgs -Wait -PassThru -NoNewWindow
+if ($wakeResult.ExitCode -ne 0) {
+    throw "Failed to register resume task (exit code $($wakeResult.ExitCode))."
+}
 # A minute trigger cannot run while the machine is hibernated. StartWhenAvailable
 # makes Task Scheduler run the missed synchronization as soon as Windows resumes,
 # without waking the machine every minute while it is asleep.
 $taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Set-ScheduledTask -TaskName $intervalTaskName -Settings $taskSettings | Out-Null
 Set-ScheduledTask -TaskName $bootTaskName -Settings $taskSettings | Out-Null
+Set-ScheduledTask -TaskName $resumeTaskName -Settings $taskSettings | Out-Null
 if (-not $SkipInitialRun) {
     & schtasks.exe /Run /TN $intervalTaskName
     if ($LASTEXITCODE -ne 0) {
@@ -93,6 +105,6 @@ if (-not $SkipInitialRun) {
     }
 }
 Write-Host "Installed: $target"
-Write-Host "Tasks: $intervalTaskName (every $($intervalInfo.TimeSpan)), $bootTaskName (at boot, delayed 30 seconds)."
+Write-Host "Tasks: $intervalTaskName (every $($intervalInfo.TimeSpan)), $bootTaskName (at boot, delayed 30 seconds), $resumeTaskName (after wake, retry up to 45 seconds)."
 Write-Host 'Both run as SYSTEM without a user sign-in.'
 Write-Host 'Status: C:\ProgramData\TimeSync\status.json'
