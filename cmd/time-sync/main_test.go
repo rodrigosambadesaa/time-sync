@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/rodrigosambadesaa/time-sync/internal/ntp"
 	"strings"
+    "sync/atomic"
 	"testing"
 	"time"
 )
@@ -91,4 +92,30 @@ func TestSecureModeRejectsMixedAuthenticatedResponses(t *testing.T) {
     if err == nil || called || status.Applied {
         t.Fatalf("accepted mixed NTP sources: result=%+v err=%v", status, err)
     }
+}
+
+func TestRetryAfterResumeRecoversWithoutLosingNTS(t *testing.T) {
+    var requests atomic.Int32
+    clockCalls := 0
+    query := func(_ context.Context, host string) (ntp.Sample, error) {
+        count := requests.Add(1)
+        if count <= 2 {
+            return ntp.Sample{Server: host}, errors.New("network unavailable during wake")
+        }
+        return ntp.Sample{Server: host, Offset: 6*time.Millisecond, Authenticated: true}, nil
+    }
+    status, n, err := synchronizeWithRetry(context.Background(), []string{"a", "b"}, "sync", time.Minute, true, 3*time.Second, query,
+        func(time.Duration) error { clockCalls++; return nil })
+    if err != nil || n != 2 || !status.Applied || clockCalls != 1 || requests.Load() != 4 {
+        t.Fatalf("status=%+v n=%d calls=%d requests=%d err=%v", status, n, clockCalls, requests.Load(), err)
+    }
+}
+func TestRetryRejectsUnauthenticatedResponses(t *testing.T) {
+    clockCalls := 0
+    query := func(_ context.Context, host string) (ntp.Sample, error) {
+        return ntp.Sample{Server: host, Offset: 6*time.Millisecond, Authenticated: false}, nil
+    }
+    status, _, err := synchronizeWithRetry(context.Background(), []string{"a", "b"}, "sync", time.Minute, true, 5*time.Millisecond, query,
+        func(time.Duration) error { clockCalls++; return nil })
+    if err == nil || status.Applied || clockCalls != 0 { t.Fatalf("status=%+v err=%v", status, err) }
 }

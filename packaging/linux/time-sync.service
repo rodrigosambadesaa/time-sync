@@ -6,7 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/libexec/time-sync/time-sync -mode sync
+ExecStart=/usr/local/libexec/time-sync/time-sync -mode sync -retry-window 45s
 User=root
 StateDirectory=time-sync
 StateDirectoryMode=0755

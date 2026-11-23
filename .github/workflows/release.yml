@@ -74,6 +74,16 @@ jobs:
         run: |
           set -euo pipefail
           bash -n install-linux.sh uninstall-linux.sh
+          sh -n packaging/linux/time-sync-resume
+          fake_bin="$RUNNER_TEMP/time-sync-fakebin"
+          mkdir -p "$fake_bin"
+          printf '%s\n' '#!/bin/sh' 'echo "$*" >> "$HOOK_LOG"' > "$fake_bin/systemctl"
+          chmod +x "$fake_bin/systemctl"
+          export HOOK_LOG="$RUNNER_TEMP/time-sync-hook.log"
+          PATH="$fake_bin:$PATH" sh packaging/linux/time-sync-resume pre hibernate
+          test ! -e "$HOOK_LOG"
+          PATH="$fake_bin:$PATH" sh packaging/linux/time-sync-resume post hibernate
+          grep -q -- '^--no-block start time-sync.service$' "$HOOK_LOG"
           sed 's/@INTERVAL@/1/g' packaging/linux/time-sync.timer.in > "$RUNNER_TEMP/time-sync.timer"
           sed 's|/usr/local/libexec/time-sync/time-sync|/bin/true|' packaging/linux/time-sync.service > "$RUNNER_TEMP/time-sync.service"
           systemd-analyze verify "$RUNNER_TEMP/time-sync.service" "$RUNNER_TEMP/time-sync.timer"
@@ -83,7 +93,12 @@ jobs:
         run: |
           set -euo pipefail
           bash -n install-macos.sh uninstall-macos.sh
-          sed 's/@INTERVAL_SECONDS@/60/g' packaging/macos/com.rodrigosambadesaa.time-sync.plist.in > "$RUNNER_TEMP/time-sync.plist"
+          bash -n packaging/macos/render-calendar.sh
+          bash packaging/macos/render-calendar.sh packaging/macos/com.rodrigosambadesaa.time-sync.plist.in 1 "$RUNNER_TEMP/time-sync.plist"
+          test "$(grep -c '<key>Minute</key>' "$RUNNER_TEMP/time-sync.plist")" -eq 60
+          ! grep -q '@CALENDAR_ENTRIES@' "$RUNNER_TEMP/time-sync.plist"
+          bash packaging/macos/render-calendar.sh packaging/macos/com.rodrigosambadesaa.time-sync.plist.in 7 "$RUNNER_TEMP/time-sync-7m.plist"
+          plutil -lint "$RUNNER_TEMP/time-sync-7m.plist"
           plutil -lint "$RUNNER_TEMP/time-sync.plist"
       - name: Validate Windows PowerShell installer syntax
         if: runner.os == 'Windows'
@@ -108,7 +123,7 @@ jobs:
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -BinaryPath $binary -SkipInitialRun
             if ($LASTEXITCODE -ne 0) { throw 'Installer smoke test failed.' }
             $installed = Join-Path $env:ProgramFiles 'TimeSync\time-sync.exe'
-            foreach ($name in @('TimeSync-Periodic', 'TimeSync-OnBoot')) {
+            foreach ($name in @('TimeSync-Periodic', 'TimeSync-OnBoot', 'TimeSync-OnResume')) {
               $task = Get-ScheduledTask -TaskName $name -ErrorAction Stop
               if ($task.State -eq 'Disabled') { throw "Task $name is disabled." }
               if ($task.Actions[0].Execute.Trim('"') -ne $installed) { throw "Task $name has an unexpected executable: $($task.Actions[0].Execute)" }
@@ -116,6 +131,10 @@ jobs:
             }
             $periodic = Get-ScheduledTask -TaskName 'TimeSync-Periodic'
             $startup = Get-ScheduledTask -TaskName 'TimeSync-OnBoot'
+            $resume = Get-ScheduledTask -TaskName 'TimeSync-OnResume'
+            if (-not ($resume.Triggers | Where-Object { $_.CimClass.CimClassName -match 'EventTrigger' })) { throw 'Resume event trigger is missing.' }
+            $resumeXml = Export-ScheduledTask -TaskName 'TimeSync-OnResume'
+            if ($resumeXml -notmatch 'Power-Troubleshooter' -or $resumeXml -notmatch '107') { throw 'Resume events were not registered.' }
             if (-not $periodic.Settings.StartWhenAvailable) { throw 'Periodic task is not configured to run after resume.' }
             if (-not ($periodic.Triggers | Where-Object { $_.CimClass.CimClassName -match 'TimeTrigger|Calendar' })) { throw 'Periodic trigger is missing.' }
             if (-not ($startup.Triggers | Where-Object { $_.CimClass.CimClassName -match 'BootTrigger' })) { throw 'Startup trigger is missing.' }
@@ -163,11 +182,11 @@ jobs:
                 windows) zip -q -j "$archive" "$folder/$filename" install.ps1 uninstall.ps1 README.md LICENSE ;;
                 linux)
                   zip -q -j "$archive" "$folder/$filename" install-linux.sh uninstall-linux.sh README.md LICENSE
-                  zip -q "$archive" packaging/linux/time-sync.service packaging/linux/time-sync.timer.in ;;
+                  zip -q "$archive" packaging/linux/time-sync.service packaging/linux/time-sync.timer.in packaging/linux/time-sync-resume ;;
                 android) zip -q -j "$archive" "$folder/$filename" README.md LICENSE ;;
                 darwin)
                   zip -q -j "$archive" "$folder/$filename" install-macos.sh uninstall-macos.sh README.md LICENSE
-                  zip -q "$archive" packaging/macos/com.rodrigosambadesaa.time-sync.plist.in ;;
+                  zip -q "$archive" packaging/macos/com.rodrigosambadesaa.time-sync.plist.in packaging/macos/render-calendar.sh ;;
               esac
             done
           done
@@ -181,7 +200,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version='v0.4.0'
+          version='v0.4.1'
           if [[ "$EVENT" == workflow_dispatch ]]; then
             version="$INPUT_VERSION"
             if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

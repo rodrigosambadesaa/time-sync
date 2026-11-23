@@ -73,6 +73,35 @@ func synchronize(ctx context.Context, servers []string, mode string, maxStep tim
 	return status, len(agreed), err
 }
 
+// Retry is explicitly bounded so a wake event preceding Wi-Fi/DNS recovery
+// does not defer the next valid time correction to the periodic timer.
+// Every attempt requires the same authentication and server consensus.
+func synchronizeWithRetry(ctx context.Context, servers []string, mode string, maxStep time.Duration, requireAuth bool, retryWindow time.Duration, query queryFunc, apply func(time.Duration) error) (result, int, error) {
+    deadline := time.Now().Add(retryWindow)
+    for {
+        attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+        status, agreed, err := synchronize(attemptCtx, servers, mode, maxStep, requireAuth, query, apply)
+        cancel()
+        if err == nil || retryWindow == 0 { return status, agreed, err }
+        remaining := time.Until(deadline)
+        if remaining <= 0 { return status, agreed, err }
+        if ctx.Err() != nil {
+            status.Error = ctx.Err().Error()
+            return status, agreed, ctx.Err()
+        }
+        delay := 2 * time.Second
+        if remaining < delay { delay = remaining }
+        timer := time.NewTimer(delay)
+        select {
+        case <-ctx.Done():
+            timer.Stop()
+            status.Error = ctx.Err().Error()
+            return status, agreed, ctx.Err()
+        case <-timer.C:
+        }
+    }
+}
+
 func validateServers(value string) ([]string, error) {
 	servers := strings.Split(value, ",")
 	if len(servers) < 2 || len(servers) > 8 {
@@ -136,6 +165,7 @@ func main() {
     allowInsecure := flag.Bool("allow-insecure", false, "explicitly opt into unauthenticated legacy NTP")
     sshTarget := flag.String("target-ssh", "", "root@host for a jailbroken iOS device reachable through trusted SSH (sync only)")
 	maxStep := flag.Duration("max-step", 10*time.Minute, "refuse clock corrections larger than this")
+    retryWindow := flag.Duration("retry-window", 0, "retry failed sync after wake while the network recovers (e.g. 45s)")
 	flag.Parse()
 	if *mode != "sync" && *mode != "check" {
 		fmt.Fprintln(os.Stderr, "-mode must be sync or check")
@@ -170,13 +200,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-max-step must be positive")
 		os.Exit(2)
 	}
-	servers, err := validateServers(*peers)
+	if *retryWindow < 0 || *retryWindow > 5*time.Minute {
+        fmt.Fprintln(os.Stderr, "-retry-window must be between 0 and 5m")
+        os.Exit(2)
+    }
+    servers, err := validateServers(*peers)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx := context.Background()
 	query := ntp.QueryNTS
     if *auth == "insecure" { query = ntp.Query }
     apply := setClock
@@ -185,7 +218,7 @@ func main() {
             return setRemoteClock(offset, *maxStep, sshRunner(*sshTarget))
         }
     }
-    status, agreed, err := synchronize(ctx, servers, *mode, *maxStep, *auth == "nts", query, apply)
+    status, agreed, err := synchronizeWithRetry(ctx, servers, *mode, *maxStep, *auth == "nts", *retryWindow, query, apply)
     if *sshTarget != "" { status.Target = *sshTarget }
 	if *mode == "sync" {
 		writeStatus(status)

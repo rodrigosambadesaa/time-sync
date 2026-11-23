@@ -34,6 +34,8 @@ done
 install -d -m 0755 /usr/local/libexec/time-sync
 install -m 0755 "$binary" /usr/local/libexec/time-sync/time-sync
 install -m 0644 "$script_dir/packaging/linux/time-sync.service" /etc/systemd/system/time-sync.service
+install -d -m 0755 /usr/lib/systemd/system-sleep
+install -m 0755 "$script_dir/packaging/linux/time-sync-resume" /usr/lib/systemd/system-sleep/time-sync
 sed "s/@INTERVAL@/$minutes/g" "$script_dir/packaging/linux/time-sync.timer.in" > /etc/systemd/system/time-sync.timer
 chmod 0644 /etc/systemd/system/time-sync.timer
 systemctl daemon-reload
